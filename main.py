@@ -1,41 +1,55 @@
 from fastapi import FastAPI, Query
 import httpx
 import xml.etree.ElementTree as ET
+from typing import Dict, List, Optional
 
 app = FastAPI()
 
-# Unipass API 기본 URL 및 고정된 crkyCn 값
 BASE_URL = "https://unipass.customs.go.kr:38010/ext/rest/cargCsclPrgsInfoQry/retrieveCargCsclPrgsInfo"
 CRKY_CN = "k260e285l002p153c060e060c1"
 
 @app.get("/carg-info/")
-async def get_carg_info(cargMtNo: str = Query(..., description="Cargo Manifest Number")):
+async def get_carg_info(
+    cargMtNo: Optional[str] = Query(None, description="Cargo Manifest Number"),
+    mblNo: Optional[str] = Query(None, description="Master B/L Number"),
+    hblNo: Optional[str] = Query(None, description="House B/L Number"),
+    blYy: Optional[str] = Query(None, description="B/L Year")
+) -> Dict:
     """
-    cargMtNo를 입력받아 Unipass API에 요청을 보내고 응답을 XML로 파싱하여 반환하는 엔드포인트
+    cargMtNo 또는 (mblNo + blYy) 또는 (hblNo + blYy)를 입력받아 Unipass API에 요청을 보내고 응답을 JSON으로 반환하는 엔드포인트
     """
-    params = {
-        "crkyCn": CRKY_CN,
-        "cargMtNo": cargMtNo
-    }
+    if not cargMtNo and not (mblNo and blYy) and not (hblNo and blYy):
+        return {"error": "Invalid parameters", "details": "You must provide either cargMtNo, or (mblNo + blYy), or (hblNo + blYy)."}
+
+    params = {"crkyCn": CRKY_CN}
+    if cargMtNo:
+        params["cargMtNo"] = cargMtNo
+    elif mblNo and blYy:
+        params["mblNo"] = mblNo
+        params["blYy"] = blYy
+    elif hblNo and blYy:
+        params["hblNo"] = hblNo
+        params["blYy"] = blYy
 
     async with httpx.AsyncClient(verify=False) as client:
-        try:
-            response = await client.get(BASE_URL, params=params)
-            response.raise_for_status()  # HTTP 오류 발생 시 예외 발생
+        async with client.stream("GET", BASE_URL, params=params) as response:
+            response.raise_for_status()
+            raw_data = await response.aread()
 
-            # XML 파싱 (Content-Type 검사 제거)
-            root = ET.fromstring(response.text)
+            # 원본 XML 데이터를 저장 (디버깅용)
+            with open("unipass_raw_response.xml", "wb") as f:
+                f.write(raw_data)
 
-            # 필요한 데이터를 XML에서 추출 (예시)
-            data = {}
-            for elem in root.iter():
-                data[elem.tag] = elem.text.strip() if elem.text else None
+            root = ET.fromstring(raw_data.decode("utf-8"))
 
-            return data  # JSON 형태로 반환
+            # 다건 데이터 처리
+            cargo_list = []
+            for cargo in root.findall("cargCsclPrgsInfoQryVo"):
+                cargo_data = {elem.tag: elem.text.strip() if elem.text else None for elem in cargo}
+                cargo_list.append(cargo_data)
 
-        except httpx.HTTPStatusError as e:
-            return {"error": "HTTP Error", "details": str(e)}
-        except httpx.RequestError as e:
-            return {"error": "Request Error", "details": str(e)}
-        except ET.ParseError as e:
-            return {"error": "XML Parse Error", "details": str(e)}
+            # 단건 데이터 처리
+            data = {elem.tag: elem.text.strip() if elem.text else None for elem in root if elem.tag != "cargCsclPrgsInfoQryVo"}
+            data["cargo_list"] = cargo_list  # 다건 데이터를 리스트로 추가
+
+            return data
