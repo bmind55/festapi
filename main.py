@@ -1,9 +1,16 @@
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, Query, Request
+from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
 import httpx
 import xml.etree.ElementTree as ET
 from typing import Dict, Any, Optional
 
 app = FastAPI()
+
+# ✅ HTML 템플릿 & 정적 파일 설정 (웹 페이지 추가)
+app.mount("/static", StaticFiles(directory="static"), name="static")
+templates = Jinja2Templates(directory="templates")
 
 BASE_URL = "https://unipass.customs.go.kr:38010/ext/rest/cargCsclPrgsInfoQry/retrieveCargCsclPrgsInfo"
 CRKY_CN = "k260e285l002p153c060e060c1"
@@ -27,6 +34,7 @@ def xml_to_dict(element: ET.Element) -> Dict[str, Any]:
     
     return result
 
+# ✅ 기존 API 기능 유지
 @app.get("/carg-info/")
 async def get_carg_info(
     cargMtNo: Optional[str] = Query(None, description="Cargo Manifest Number"),
@@ -65,3 +73,8 @@ async def get_carg_info(
             data = xml_to_dict(root)
 
             return data
+
+# ✅ 개인정보 취급 방침 페이지 추가
+@app.get("/privacy-policy", response_class=HTMLResponse)
+async def privacy_policy(request: Request):
+    return templates.TemplateResponse("privacy.html", {"request": request})
